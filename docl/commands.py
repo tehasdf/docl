@@ -21,6 +21,7 @@ import time
 import threading
 import os
 import base64
+from copy import deepcopy
 
 import sh
 import argh
@@ -31,6 +32,7 @@ from watchdog import observers
 from path import path
 
 from cloudify_cli.env import profile
+from integration_tests.utils import get_remote_storage_manager
 
 from docl import constants
 from docl import resources
@@ -220,8 +222,6 @@ def run(mount=False, label=None, details_path=None, tag=None):
         json.dump({
             'ip': container_ip,
             'services': constants.ALL_IP_SERVICES,
-            'rest_username': os.environ.get('CLOUDIFY_USERNAME'),
-            'rest_password': os.environ.get('CLOUDIFY_PASSWORD'),
             'rest_port': profile.rest_port,
             'rest_protocol': profile.rest_protocol,
             'is_debug_on': bool(os.environ.get('DEBUG_MODE')),
@@ -231,10 +231,20 @@ def run(mount=False, label=None, details_path=None, tag=None):
         cp(source=f.name,
            target=':{}'.format(constants.DATA_JSON_TARGET_PATH),
            container_id=container_id)
+    _update_provider_context(container_ip)
     docker('exec', container_id,
            '/opt/mgmtworker/env/bin/python', '-u',
            constants.PY_SCRIPT_TARGET_PATH,
            constants.DATA_JSON_TARGET_PATH)
+
+
+def _update_provider_context(container_ip):
+    sm = get_remote_storage_manager(container_ip)
+    context = sm.get_provider_context()
+    new_context = deepcopy(context.context)
+    new_context['cloudify']['cloudify_agent']['broker_ip'] = container_ip
+    context.context = new_context
+    sm._safe_add(context)
 
 
 @command
@@ -491,6 +501,8 @@ def _ssh_setup(container_id, container_ip):
 def _cfy_bootstrap(inputs, cfy_args):
     cfy.init(r=True)
     args = ['--inputs={}'.format(i) for i in inputs]
+    cfy_args = cfy_args or ''
+    cfy_args += '--skip-sanity'
     if cfy_args:
         args += shlex.split(cfy_args)
     try:

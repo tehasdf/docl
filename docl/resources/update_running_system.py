@@ -19,14 +19,8 @@ import json
 import os
 import re
 import sys
-import time
 
 import requests.packages.urllib3
-
-from cloudify.context import CloudifyContext
-from cloudify.state import current_ctx
-from cloudify.manager import get_rest_client
-
 requests.packages.urllib3.disable_warnings()
 
 
@@ -98,8 +92,6 @@ def restart_services(services):
 
 def update_provider_context(data):
     ip = data['ip']
-    username = data['rest_username']
-    password = data['rest_password']
     rest_port = data['rest_port']
     rest_protocol = data['rest_protocol']
     print 'Updating provider context with broker_ip: {}'.format(ip)
@@ -107,27 +99,9 @@ def update_provider_context(data):
         'REST_HOST': ip,
         'REST_PORT': str(rest_port),
         'REST_PROTOCOL': rest_protocol,
-        'SECURITY_ENABLED': str(password is not None),
+        'SECURITY_ENABLED': 'True',
         'VERIFY_REST_CERTIFICATE': '',
     })
-    ctx = CloudifyContext({
-        'rest_username': username,
-        'rest_password': password
-    })
-    with current_ctx.push(ctx):
-        client = get_rest_client()
-    for _ in range(200):
-        try:
-            context_obj = client.manager.get_context()
-            break
-        except:
-            time.sleep(0.1)
-    else:
-        raise
-    name = context_obj['name']
-    context = context_obj['context']
-    context['cloudify']['cloudify_agent']['broker_ip'] = ip
-    client.manager.update_context(name, context)
 
 
 def main():
