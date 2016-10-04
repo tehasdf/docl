@@ -1,0 +1,16 @@
+user www-data;
+worker_processes 1;
+pid /run/nginx.pid;
+
+
+events {
+    worker_connections 768;
+}
+
+http {
+    server {
+        listen DOCL_NGINX_PORT default_server;
+        root /usr/share/nginx/html;
+    }
+}
+

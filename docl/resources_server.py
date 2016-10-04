@@ -13,36 +13,78 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import json
+import tempfile
 from contextlib import contextmanager
 
-import sh
 import yaml
 
-from docl import files
+from docl import files, resources
 from docl.configuration import configuration
 from docl.work import work
 from docl.logs import logger
-from docl.subprocess import serve
+from docl.subprocess import quiet_docker
 
 
 @contextmanager
-def with_server(invalidate_cache, no_progress=False):
-    process, local_resources_url = start(invalidate_cache=invalidate_cache,
-                                         no_progress=no_progress)
+def with_server(invalidate_cache, no_progress=False, network='bridge'):
+    server = FileServer(work.dir, network=network)
+    local_resources_url = server.start(invalidate_cache=invalidate_cache,
+                                       no_progress=no_progress)
     try:
         yield local_resources_url
     finally:
-        process.kill()
-        try:
-            process.wait()
-        except sh.SignalException:
-            pass
+        server.stop()
 
 
-def start(invalidate_cache=False, no_progress=False):
-    if invalidate_cache or not work.cached_resources_tar_path.exists():
-        _download_resources_tar(no_progress=no_progress)
-    return _serve()
+class FileServer(object):
+    def __init__(self, directory, network, port=9797):
+        self._directory = directory
+        self._network = network
+        self._port = port
+        self._container_id = None
+
+    def start(self, invalidate_cache=False, no_progress=False):
+        if invalidate_cache or not work.cached_resources_tar_path.exists():
+            _download_resources_tar(no_progress=no_progress)
+
+        with tempfile.NamedTemporaryFile(delete=False) as nginx_conf:
+            config_template = resources.get('nginx_conf.tmpl')
+            config_template = config_template.replace('DOCL_NGINX_PORT',
+                                                      '{0}'.format(self._port))
+            nginx_conf.write(config_template)
+
+        volume_desc = [
+            '{0}:/etc/nginx/nginx.conf:ro'.format(nginx_conf.name),
+            '{0}:/usr/share/nginx/html:ro'.format(self._directory)
+        ]
+        run_container = quiet_docker.run.bake(name='docl-fileserver',
+                                              d=True,
+                                              network=self._network)
+        for volume in volume_desc:
+            run_container = run_container.bake(v=volume)
+        self._container_id = run_container('nginx:1.11').wait().rstrip()
+
+        inspect_command = quiet_docker.inspect.bake(self._container_id)
+        inspect_result = inspect_command()
+        inspect_result.wait()
+        inspect_data = json.loads(inspect_result.stdout)
+
+        fileserver_address = inspect_data[0]['NetworkSettings']['Networks'][
+            self._network]['IPAddress']
+        local_resources_url = 'http://{}:{}/{}'.format(
+            fileserver_address, self._port,
+            work.cached_resources_tar_path.basename())
+        logger.info('Resources tar available at {}'
+                    .format(local_resources_url))
+        return local_resources_url
+
+    def stop(self):
+        if self._container_id is None:
+            raise RuntimeError('FileServer: tried to stop container before '
+                               'starting it')
+        quiet_docker.stop(self._container_id)
+        quiet_docker.rm(self._container_id)
 
 
 def get_host():
@@ -52,16 +94,6 @@ def get_host():
     if ':' in host:
         host = host.split(':')[0]
     return host
-
-
-def _serve():
-    host = get_host()
-    port = 9797
-    local_resources_url = 'http://{}:{}/{}'.format(
-        host, port, work.cached_resources_tar_path.basename())
-    process = serve(work.dir, host=host, port=port, _bg=True)
-    logger.info('Resources tar available at {}'.format(local_resources_url))
-    return process, local_resources_url
 
 
 def _download_resources_tar(no_progress):

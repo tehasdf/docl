@@ -382,10 +382,7 @@ def serve_resources_tar(invalidate_cache=False, no_progress=False):
     with resources_server.with_server(invalidate_cache=invalidate_cache,
                                       no_progress=no_progress):
         while True:
-            try:
-                time.sleep(10)
-            except KeyboardInterrupt:
-                break
+            time.sleep(10)
 
 
 def _restart_service(container_id, service):
